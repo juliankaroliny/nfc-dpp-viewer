@@ -185,15 +185,33 @@ function viewBase64(rec) {
 
 /* --------------------------------------------------------- smart views */
 
-const TEXT_CLAIMS = { iss: 'Issuer', sub: 'Subject', aud: 'Audience', vct: 'Credential type', jti: 'Token ID' };
+// JWT claims plus the W3C Verifiable Credential fields (issuer, type, validFrom/validUntil).
+const TEXT_CLAIMS = {
+  iss: 'Issuer', issuer: 'Issuer', sub: 'Subject', aud: 'Audience', type: 'Type', vct: 'Credential type', jti: 'Token ID',
+};
 const TIME_CLAIMS = { iat: 'Issued', nbf: 'Not before', exp: 'Expires' };
+const DATE_FIELDS = { validFrom: 'Valid from', validUntil: 'Valid until' };
+
+function claimText(v) {
+  if (Array.isArray(v)) return v.join(', ');
+  if (v && typeof v === 'object') return typeof v.id === 'string' ? v.id : JSON.stringify(v); // e.g. issuer: {id, name}
+  return String(v);
+}
 
 function claimsSummary(payload) {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
   const rows = [];
   for (const [key, label] of Object.entries(TEXT_CLAIMS)) {
+    if (payload[key] != null) rows.push([label, claimText(payload[key])]);
+  }
+  for (const [key, label] of Object.entries(DATE_FIELDS)) {
     const v = payload[key];
-    if (v != null) rows.push([label, Array.isArray(v) ? v.join(', ') : typeof v === 'object' ? JSON.stringify(v) : String(v)]);
+    if (typeof v !== 'string') continue;
+    const t = Date.parse(v);
+    let badge = null;
+    if (key === 'validUntil' && !Number.isNaN(t)) badge = t < Date.now() ? ['bad', 'expired'] : ['good', 'not expired'];
+    if (key === 'validFrom' && t > Date.now()) badge = ['bad', 'not yet valid'];
+    rows.push([label, h('span', {}, v, badge && [' ', h('span', { class: `badge badge-${badge[0]}` }, badge[1])])]);
   }
   const now = Date.now() / 1000;
   for (const [key, label] of Object.entries(TIME_CLAIMS)) {

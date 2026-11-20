@@ -1,101 +1,44 @@
 /**
- * Sample scan so the viewer can be tried on any device (desktop, iPhone…).
- * All values are fake. Tokens carry random bytes instead of real signatures.
+ * Sample scan, so the viewer can be tried on any device (desktop, iPhone…).
+ *
+ * 1. URL record: the unique product identifier of OwnYourData's reference passport
+ *    (a fictitious test lamp). It resolves: https://id.ownyourdata.eu answers with the
+ *    passport as HTML or, with Accept: application/json, as JSON.
+ * 2. JWT record: exactly the format the PSoC 6 demonstrator firmware (dpp-nfc-demo) signs:
+ *    header {"alg":"EdDSA","typ":"JWT"}, the same credential JSON and an issuer
+ *    did:oyd:z6Mk… derived from the signing key. It is signed with a throwaway demo key,
+ *    not a device key: the signature is valid for the key in its own issuer DID, but that
+ *    DID is not registered anywhere.
  */
-import { utf8, encodeBase64 } from './decode.js';
+import { utf8 } from './decode.js';
 
-const b64url = (data) => encodeBase64(typeof data === 'string' ? utf8(data) : data, { url: true });
-const randomBytes = (n) => crypto.getRandomValues(new Uint8Array(n));
+const PRODUCT_ID = 'https://id.ownyourdata.eu/01/09520123456788/21/TEST-SIG-0002';
+
+const DEVICE_JWT = [
+  'eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJAY29udGV4dCI6WyJodHRwczovL3d3dy53My5vcmcvbnMvY3JlZGVudGlhbHM',
+  'vdjIiLCJodHRwczovL3czaWQub3JnL3NlY3VyaXR5L3N1aXRlcy9lZDI1NTE5LTIwMjAvdjEiLHsiQHZvY2FiIjoiaHR0cHM6Ly9',
+  'zb3lhLm93bnlvdXJkYXRhLmV1L0RQUF9MZXVjaHRtaXR0ZWwvIn1dLCJpZCI6InVybjp1dWlkOjNmYTg1ZjY0LTU3MTctNDU2Mi1',
+  'iM2ZjLTJjOTYzZjY2YWZhNiIsInR5cGUiOiJEaWdpdGFsUHJvZHVjdFBhc3Nwb3J0IiwiaXNzdWVyIjoiZGlkOm95ZDp6Nk1rcVJ',
+  'DcmVaM0pZV0NUeHpNV0RSc1MzcWFROWlRaFV3WEQxNU1HWVdwVHlrMm0iLCJ2YWxpZEZyb20iOiIyMDI2LTA0LTA5IiwiY3JlZGV',
+  'udGlhbFN1YmplY3QiOnsicHJvZHVjdCI6eyJtYW51ZmFjdHVyZXIiOiJIaWthcmkgTGlnaHRpbmcgR21iSCIsIm1vZGVsIjoiU0F',
+  'MLTUwMDAiLCJzZXJpYWxOdW1iZXIiOiJTTjAwMDEiLCJtYW51ZmFjdHVyZURhdGUiOiIyMDI2LTAxLTAxIn0sIm9wZXJhdGlvbmF',
+  'sU3RhdHVzIjp7InVwdGltZVNlY29uZHMiOjE2MDE0MCwibnVtYmVyT2ZPcGVyYXRpb25zIjoyMjV9LCJkcHBBY2Nlc3MiOnsicmV',
+  'naXN0cnlMaW5rIjoiaHR0cHM6Ly9kcHAtcG9kLmdvLWRhdGEuYXQvb2JqZWN0LzI3MDEifX19.ycR2AUZaKUmkfM9wxCUY9uLK43',
+  'd_Lr_Gw2OTosHETd0THEczWYQ_mcOuzzecsEbPjkpOAdfzM5y8UWMy_WrFDQ',
+].join('');
 
 const rec = (recordType, bytes, extra = {}) => ({
   recordType, mediaType: null, id: null, encoding: null, lang: null, bytes, children: null, ...extra,
 });
-const textRec = (text, lang = 'en') => rec('text', utf8(text), { encoding: 'utf-8', lang });
-const urlRec = (url) => rec('url', utf8(url));
-const mimeRec = (mediaType, bytes) => rec('mime', bytes, { mediaType });
-
-/** Minimal NDEF encoder (short records only), to give the smart poster realistic raw bytes. */
-function encodeNdef(records) {
-  const out = [];
-  records.forEach((r, i) => {
-    const type = utf8(r.type);
-    let header = 0x10 | (r.tnf & 0x07); // SR (short record) + TNF
-    if (i === 0) header |= 0x80; // MB (message begin)
-    if (i === records.length - 1) header |= 0x40; // ME (message end)
-    out.push(header, type.length, r.payload.length, ...type, ...r.payload);
-  });
-  return new Uint8Array(out);
-}
 
 export function buildSampleScan() {
-  const now = Math.floor(Date.now() / 1000);
-
-  const passport = {
-    '@context': 'https://example.com/dpp/v1',
-    type: 'DigitalProductPassport',
-    id: 'urn:example:dpp:4711',
-    product: { name: 'Aluminium Water Bottle 0.75 l', gtin: '09506000134352', batch: 'LOT42', manufacturer: 'Example GmbH' },
-    materials: [
-      { name: 'Aluminium', share: 0.92, recycled: true },
-      { name: 'Silicone', share: 0.08, recycled: false },
-    ],
-    carbonFootprintKgCO2e: 2.7,
-    repairable: true,
-    endOfLife: null,
-  };
-
-  const jwt = [
-    b64url(JSON.stringify({ alg: 'ES256', typ: 'JWT', kid: 'demo-key-1' })),
-    b64url(JSON.stringify({
-      iss: 'https://issuer.example.com',
-      sub: 'urn:example:dpp:4711',
-      iat: now - 86400,
-      exp: now + 30 * 86400,
-      product: { gtin: '09506000134352', batch: 'LOT42' },
-    })),
-    b64url(randomBytes(64)),
-  ].join('.');
-
-  const disclosures = [
-    [b64url(randomBytes(16)), 'material', 'recycled aluminium'],
-    [b64url(randomBytes(16)), 'carbon_footprint_kg', 2.7],
-  ].map((d) => b64url(JSON.stringify(d)));
-  const sdJwt = `${[
-    b64url(JSON.stringify({ alg: 'ES256', typ: 'dc+sd-jwt' })),
-    b64url(JSON.stringify({
-      iss: 'https://issuer.example.com',
-      iat: now - 2 * 86400,
-      exp: now - 86400,
-      vct: 'https://example.com/credentials/dpp',
-      _sd_alg: 'sha-256',
-      _sd: [b64url(randomBytes(32)), b64url(randomBytes(32))],
-    })),
-    b64url(randomBytes(64)),
-  ].join('.')}~${disclosures.join('~')}~`;
-
-  const posterUrl = 'https://example.com/dpp/4711';
-  const posterTitle = 'Product passport';
-  const smartPosterBytes = encodeNdef([
-    { tnf: 1, type: 'U', payload: [0x04, ...utf8(posterUrl.replace('https://', ''))] },
-    { tnf: 1, type: 'T', payload: [0x02, ...utf8('en'), ...utf8(posterTitle)] },
-  ]);
-
-  // CBOR: {1: "09506000134352", 2: "LOT42", 3: true}
-  const cbor = Uint8Array.of(0xa3, 0x01, 0x6e, ...utf8('09506000134352'), 0x02, 0x65, ...utf8('LOT42'), 0x03, 0xf5);
-
   return {
     sample: true,
     time: new Date(),
     serialNumber: '04:a2:5b:1c:7e:61:80',
     records: [
-      urlRec('https://id.example.com/01/09506000134352/10/LOT42/21/SN12345?linkType=gs1:dpp'),
-      textRec('Hello from an NFC tag 👋'),
-      mimeRec('application/json', utf8(JSON.stringify(passport))),
-      textRec(encodeBase64(utf8(JSON.stringify({ id: passport.id, gtin: passport.product.gtin, recyclable: true })))),
-      mimeRec('application/jwt', utf8(jwt)),
-      textRec(sdJwt),
-      rec('smart-poster', smartPosterBytes, { children: [urlRec(posterUrl), textRec(posterTitle)] }),
-      rec('example.com:dpp', cbor),
+      rec('url', utf8(PRODUCT_ID)),
+      rec('mime', utf8(DEVICE_JWT), { mediaType: 'application/jwt' }),
     ],
   };
 }
