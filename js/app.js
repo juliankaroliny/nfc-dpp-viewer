@@ -1,6 +1,6 @@
 import { detectEnvironment } from './env.js';
 import { normalizeRecord } from './decode.js';
-import { h, renderScan, copyToClipboard } from './render.js';
+import { h, renderScan, copyToClipboard, announce } from './render.js';
 import { buildSampleScan } from './samples.js';
 
 const MAX_SCANS = 20;
@@ -24,13 +24,14 @@ let reader = null;
 let controller = null;
 let scanning = false;
 let starting = false;
+let tagCount = 0;
+let supported = false;
 
 /* ---------------------------------------------------------------- UI bits */
 
-function showNotice(tone, title, ...content) {
-  ui.notice.className = `notice notice-${tone}`;
+function showNotice(title, ...content) {
   ui.notice.replaceChildren(
-    h('strong', { class: 'notice-title' }, title),
+    h('h2', { class: 'notice-title' }, title),
     ...content.map((c) => (typeof c === 'string' ? h('p', {}, c) : c)),
   );
   ui.notice.hidden = false;
@@ -45,7 +46,6 @@ function setStatus(text, tone = '') {
 function setScanning(active) {
   scanning = active;
   ui.scanner.classList.toggle('is-scanning', active);
-  ui.scanBtn.setAttribute('aria-pressed', String(active));
   ui.scanLabel.textContent = active ? 'Stop scanning' : 'Start scanning';
 }
 
@@ -57,7 +57,10 @@ function pageLinkBox() {
 }
 
 function addScan(scan) {
-  for (const el of ui.results.querySelectorAll('details.scan')) el.open = false;
+  // Collapse older scans, but never the one holding keyboard focus.
+  for (const el of ui.results.querySelectorAll('details.scan')) {
+    if (!el.contains(document.activeElement)) el.open = false;
+  }
   ui.results.prepend(renderScan(scan));
   while (ui.results.children.length > MAX_SCANS) ui.results.lastElementChild.remove();
   ui.empty.hidden = true;
@@ -66,40 +69,40 @@ function addScan(scan) {
 
 /* ---------------------------------------------------- environment check */
 
-/** Show the right warning for this device. Returns true if NFC scanning can be offered. */
+/** Show the right hint for this device. Returns true if NFC scanning can be offered. */
 function checkSupport() {
-  if (env.isIOS) {
-    showNotice('error', `NFC reading isn't possible on ${env.device}`,
-      'Apple does not let websites use the NFC chip. This applies to Safari, Chrome, Firefox and every other iOS browser, because they all have to run on Apple\'s WebKit engine.',
-      'Please open this page on an Android phone with Chrome. You can still try the viewer with sample data.');
-    return false;
-  }
   if (env.hasWebNfc) return true;
 
+  if (env.isIOS) {
+    showNotice(`NFC reading isn't possible on ${env.device}`,
+      'Apple doesn\'t let websites use the NFC chip, in Safari or in any other iOS browser.',
+      'Open this page on an Android phone with Chrome. You can still try the viewer with sample data.');
+    return false;
+  }
   if (env.isAndroid && !env.isSecure) {
-    showNotice('error', 'Secure connection required',
+    showNotice('Secure connection required',
       'Web NFC only works on pages served over HTTPS (or from localhost). Open this page via its https:// address.');
     return false;
   }
   if (env.isWebView) {
-    showNotice('warn', 'Open this page in Chrome',
-      'You\'re in an in-app browser, which can\'t read NFC tags. Use the menu to open the page in Chrome, or copy the link:',
+    showNotice('Open this page in Chrome',
+      'In-app browsers can\'t read NFC tags. Use the menu to open the page in Chrome, or copy the link:',
       pageLinkBox());
     return false;
   }
   if (env.isAndroid) {
-    showNotice('warn', 'This browser can\'t read NFC tags',
+    showNotice('This browser can\'t read NFC tags',
       'Open this page in Chrome for Android (version 89 or newer). Other browsers, for example Firefox, don\'t support Web NFC.',
       pageLinkBox());
     return false;
   }
   if (env.isMobile) {
-    showNotice('warn', 'NFC reading isn\'t available here',
+    showNotice('NFC reading isn\'t available here',
       'Reading NFC tags from a website only works with Chrome on an Android phone.', pageLinkBox());
     return false;
   }
-  showNotice('warn', 'This only works on a phone',
-    'You\'re using a desktop browser. Websites can only read NFC tags with Chrome on an Android phone. Open this link there:',
+  showNotice('This only works on a phone',
+    'Websites can only read NFC tags with Chrome on an Android phone. Open this link there:',
     pageLinkBox(),
     'Meanwhile you can explore the viewer with sample data.');
   return false;
@@ -127,7 +130,9 @@ function onReading(event) {
     const records = Array.from(event.message?.records ?? [], (r) => normalizeRecord(r));
     addScan({ time: new Date(), serialNumber: event.serialNumber || '', records });
     navigator.vibrate?.(60);
-    setStatus(`Read ${records.length} record${records.length === 1 ? '' : 's'}. Hold another tag to read it too.`, 'ok');
+    tagCount += 1;
+    // The counter keeps consecutive messages distinct, so screen readers announce each read.
+    setStatus(`Tag ${tagCount} read: ${records.length} record${records.length === 1 ? '' : 's'}. Hold another tag to read it too.`, 'ok');
   } catch (err) {
     setStatus(`Tag read, but it could not be displayed: ${err.message}`, 'error');
   }
@@ -156,17 +161,20 @@ async function startScan() {
   }
 }
 
-function stopScan() {
+function stopScan(message = 'Scanning stopped. Tap the button to start again.') {
   controller?.abort();
   controller = null;
   setScanning(false);
-  setStatus('Scanning stopped. Tap the button to start again.');
+  setStatus(message);
 }
 
-/** If NFC permission was granted before, start right away (no tap needed). */
-async function autoStartIfPermitted() {
+/** Start right away if NFC permission was granted before, and react if it gets revoked. */
+async function watchPermission() {
   try {
     const status = await navigator.permissions.query({ name: 'nfc' });
+    status.onchange = () => {
+      if (status.state === 'denied' && scanning) stopScan('NFC permission was revoked. Allow NFC for this site to scan again.');
+    };
     if (status.state === 'granted' && !scanning && !starting) startScan();
   } catch {
     /* permission name not supported */
@@ -181,14 +189,20 @@ ui.deviceInfo.textContent = [
   env.isSecure ? 'secure context' : 'not a secure context',
 ].join(' · ');
 
-ui.sampleBtn.addEventListener('click', () => addScan(buildSampleScan()));
+ui.sampleBtn.addEventListener('click', () => {
+  addScan(buildSampleScan());
+  announce('Sample data loaded.');
+});
 ui.clearBtn.addEventListener('click', () => {
   ui.results.replaceChildren();
-  ui.empty.hidden = false;
+  ui.empty.hidden = !supported;
   ui.clearBtn.hidden = true;
+  ui.sampleBtn.focus();
+  announce('Results cleared.');
 });
 
-if (checkSupport()) {
+supported = checkSupport();
+if (supported) {
   ui.scanBtn.disabled = false;
   ui.scanBtn.addEventListener('click', () => {
     if (starting) return;
@@ -196,9 +210,12 @@ if (checkSupport()) {
     else startScan();
   });
   setStatus('Tap the button, then hold an NFC tag to the back of your phone.');
-  autoStartIfPermitted();
+  watchPermission();
 } else {
-  ui.scanBtn.disabled = true;
+  // Nothing to scan with: drop the dead scanner and keep just the sample-data action.
+  ui.scanBtn.hidden = true;
+  ui.status.hidden = true;
+  ui.empty.hidden = true;
+  ui.scanner.classList.remove('card');
   ui.sampleBtn.classList.add('btn-primary');
-  setStatus('NFC scanning is not available on this device.');
 }

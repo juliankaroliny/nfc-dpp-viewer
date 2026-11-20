@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <!-- Privacy: no external resources, and connect-src 'none' blocks every fetch/XHR/WebSocket. -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'none'; base-uri 'none'; form-action 'none'; require-trusted-types-for 'script'; trusted-types 'none'">
   <meta name="referrer" content="no-referrer">
   <meta name="color-scheme" content="light dark">
   <meta name="theme-color" content="#f4f6f9" media="(prefers-color-scheme: light)">
@@ -18,30 +18,23 @@
 <body>
   <div class="wrap">
     <header class="topbar">
-      <div class="brand">
-        <span class="brand-mark" aria-hidden="true">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
-            <path d="M5 9a3.5 3.5 0 0 1 0 6"/><path d="M8.5 6a6.5 6.5 0 0 1 0 12"/><path d="M12 3a9.5 9.5 0 0 1 0 18"/>
-          </svg>
-        </span>
-        <div>
-          <h1>NFC DPP Viewer</h1>
-          <p class="tagline">Read NDEF tags in your browser</p>
-        </div>
-      </div>
-      <span class="pill" title="All decoding happens in your browser. No data leaves your device.">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
-        On-device only
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+          <path d="M5 9a3.5 3.5 0 0 1 0 6"/><path d="M8.5 6a6.5 6.5 0 0 1 0 12"/><path d="M12 3a9.5 9.5 0 0 1 0 18"/>
+        </svg>
       </span>
+      <div>
+        <h1>NFC DPP Viewer</h1>
+        <p class="tagline">Reads NFC tags privately, on your device</p>
+      </div>
     </header>
 
     <main>
-      <section id="env-notice" class="notice" role="alert" hidden></section>
+      <section id="env-notice" class="notice" hidden></section>
 
       <section id="scanner" class="card scanner" aria-label="NFC scanner">
-        <button id="scan-btn" class="scan-btn" type="button" aria-pressed="false" aria-describedby="scan-status" disabled>
+        <button id="scan-btn" class="scan-btn" type="button" aria-describedby="scan-status" disabled>
           <span class="scan-circle">
-            <span class="ring" aria-hidden="true"></span>
             <span class="ring" aria-hidden="true"></span>
             <span class="ring" aria-hidden="true"></span>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
@@ -54,13 +47,14 @@
         <noscript><p class="scan-status">This page needs JavaScript to read NFC tags.</p></noscript>
         <div class="actions">
           <button id="sample-btn" class="btn" type="button">Try with sample data</button>
-          <button id="clear-btn" class="btn" type="button" hidden>Clear results</button>
+          <button id="clear-btn" class="btn" type="button" hidden>Clear</button>
         </div>
       </section>
 
       <!-- translate="no": keeps browser auto-translation from sending tag content to a translation service -->
       <section id="results" class="results" aria-label="Scan results" translate="no"></section>
       <p id="empty-state" class="empty">No tags read yet. Results appear here.</p>
+      <p id="announcer" class="visually-hidden" role="status" aria-live="polite"></p>
     </main>
 
     <footer>

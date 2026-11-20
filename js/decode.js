@@ -99,17 +99,18 @@ export function decodeBase64(input) {
 
 const isObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 
+/** Only called on strictly decoded text, so a U+FFFD here is a real character, not an error. */
 function isPrintableText(text) {
-  return !/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F�]/.test(text);
+  return !/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/.test(text);
 }
 
 /**
- * JSON.parse reviver that keeps numbers exactly as written when a double can't
- * represent them (e.g. 20-digit serials). Uses JSON.rawJSON where available (Chrome 114+).
+ * JSON.parse reviver that keeps big integers exactly as written (e.g. 20-digit
+ * serials) instead of rounding them. Uses JSON.rawJSON where available (Chrome 114+).
  */
 function keepNumberSource(key, value, context) {
-  if (typeof value === 'number' && context?.source !== undefined &&
-      String(value) !== context.source && typeof JSON.rawJSON === 'function') {
+  if (typeof value === 'number' && !Number.isSafeInteger(value) && Number.isInteger(value) &&
+      /^-?\d+$/.test(context?.source ?? '') && typeof JSON.rawJSON === 'function') {
     return JSON.rawJSON(context.source);
   }
   return value;
@@ -142,8 +143,11 @@ function looksLikeBase64(text) {
   return { ...res, strong };
 }
 
+// Strict: "data:" + optional type/subtype + ;params, no whitespace — so text like "Data: 92%, …" isn't matched.
+const DATA_URL_RE = /^data:((?:[\w!#$&^.+-]+\/[\w!#$&^.+-]+)?(?:;[\w!#$&^.+-]+(?:=[^;,\s]*)?)*),([\s\S]*)$/i;
+
 function parseDataUrl(text) {
-  const m = /^data:([^,]*),([\s\S]*)$/i.exec(text);
+  const m = DATA_URL_RE.exec(text);
   if (!m) return null;
   const params = m[1].split(';');
   const base64 = params.length > 1 && params[params.length - 1].toLowerCase() === 'base64';
@@ -182,7 +186,7 @@ function decodeSegmentJson(segment) {
   if (!res.ok) return undefined;
   const { text, valid } = decodeText(res.bytes);
   if (!valid) return undefined;
-  try { return JSON.parse(text); } catch { return undefined; }
+  try { return parseJson(text); } catch { return undefined; }
 }
 
 function parseDisclosure(raw) {
@@ -241,6 +245,8 @@ export function parseJose(input, allowSdJwt = true) {
 
 /* --------------------------------------------------------------- analysis */
 
+const STRUCTURED_KINDS = new Set(['json', 'jwt', 'sd-jwt', 'jwe', 'data-url', 'base64']);
+
 /**
  * Work out what a payload most likely is.
  * kinds: empty | binary | text | json | invalid-json | jwt | sd-jwt | jwe | base64 | data-url
@@ -274,7 +280,11 @@ export function analyze(bytes, { encoding = 'utf-8', mediaType = '' } = {}, dept
     const b64 = looksLikeBase64(t);
     if (b64) {
       const inner = analyze(b64.bytes, {}, depth + 1);
-      if (inner.kind !== 'binary' || b64.strong) {
+      // Many plain words/serials happen to be valid Base64 ("airports" → "j*颻l"), so without
+      // strong evidence only accept results that are clearly meaningful.
+      const meaningful = STRUCTURED_KINDS.has(inner.kind) ||
+        (inner.kind === 'text' && /^[\x20-\x7e\t\r\n]+$/.test(inner.text) && /\s/.test(inner.text.trim()));
+      if (meaningful || b64.strong) {
         return { kind: 'base64', variant: b64.variant, bytes: b64.bytes, inner };
       }
     }
@@ -313,12 +323,28 @@ const KNOWN_TYPES = {
   unknown: ['Unknown', 'TNF 5 · Unknown'],
 };
 
+/** label: short type name; tnf: NDEF type name format (shown as tooltip); detail: type string worth showing. */
 export function recordTypeInfo(rec) {
   const t = rec.recordType;
-  if (KNOWN_TYPES[t]) return { label: KNOWN_TYPES[t][0], tnf: KNOWN_TYPES[t][1] };
-  if (t.startsWith(':')) return { label: 'Local type', tnf: `TNF 1 · Local type "${t.slice(1)}"` };
-  if (t.includes(':')) return { label: 'External', tnf: `TNF 4 · External "${t}"` };
-  return { label: t || 'Record', tnf: 'Unrecognised type' };
+  if (KNOWN_TYPES[t]) return { label: KNOWN_TYPES[t][0], tnf: KNOWN_TYPES[t][1], detail: null };
+  if (t.startsWith(':')) return { label: 'Local type', tnf: 'TNF 1 · Local type', detail: t.slice(1) };
+  if (t.includes(':')) return { label: 'External', tnf: 'TNF 4 · External type', detail: t };
+  return { label: 'Record', tnf: 'Unrecognised type', detail: t || null };
+}
+
+/** Text encoding for a record: the text record's own encoding, a MIME charset parameter, or UTF-8. */
+export function recordEncoding(rec) {
+  if (rec.recordType === 'text' && rec.encoding) return rec.encoding;
+  const m = /;\s*charset\s*=\s*"?([\w.:-]+)"?/i.exec(rec.mediaType || '');
+  if (m) {
+    try {
+      new TextDecoder(m[1]);
+      return m[1];
+    } catch {
+      /* unknown charset → UTF-8 */
+    }
+  }
+  return 'utf-8';
 }
 
 /** Turn a live NDEFRecord into a plain object (so the renderer and sample data share one shape). */
